@@ -38,7 +38,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 load_dotenv()
 
 # Path to your resume PDF (default to the file you uploaded)
-RESUME_PATH = os.getenv("RESUME_PATH", "/mnt/data/Resume_Vyomesh_superset_2.pdf")
+RESUME_PATH = os.getenv("RESUME_PATH", "CV-vyomesh_ML(22-6-25).pdf")
 PHONE = os.getenv("PHONE", "+91 7043833651")
 NAME = os.getenv("FULL_NAME", "Vyomesh Bhatt")
 
@@ -720,6 +720,8 @@ def run_selenium_scans_and_apply(driver, jobs: List[JobPost], config: Dict):
 
 # -------------- MAIN FLOW --------------
 def main():
+    MAX_APPS_PER_RUN = 20   # configurable limit
+
     config = {
         "query": "machine learning",
         "location": "India",
@@ -739,11 +741,10 @@ def main():
     all_jobs = run_scrapers(config)
     logging.info("Scraped %d jobs (before selenium site scans)", len(all_jobs))
 
-    # Now append Naukri / LinkedIn / Glassdoor search results using Selenium to capture dynamic content (basic search)
-    # We'll use driver to fetch list pages and extract cards; this also gives us ability to auto-apply on those links.
+    # Selenium: scrape LinkedIn + Naukri (with login & cookies)
     driver = make_selenium_driver(headless=HEADLESS)
     try:
-        # Attempt to login/save cookies for LinkedIn, Naukri, Wellfound
+        # Attempt to login/save cookies
         try:
             load_or_login_save_cookies("linkedin", "https://www.linkedin.com/login", linkedin_login_flow, driver)
         except Exception:
@@ -757,13 +758,12 @@ def main():
         except Exception:
             pass
 
-        # Selenium: LinkedIn job search scraping (basic)
+        # LinkedIn search results
         try:
-            logging.info("Selenium: scanning LinkedIn search results (best-effort)...")
+            logging.info("Selenium: scanning LinkedIn search results...")
             search_url = f"https://www.linkedin.com/jobs/search/?keywords={quote_plus(config['query'])}&location={quote_plus(config['location'])}"
             driver.get(search_url)
             time.sleep(3)
-            # collect job cards
             cards = driver.find_elements(By.CSS_SELECTOR, ".jobs-search-results__list-item, .base-card")
             for c in cards[:80]:
                 try:
@@ -778,9 +778,9 @@ def main():
         except Exception as e:
             logging.warning("LinkedIn selenium scan failed: %s", e)
 
-        # Selenium: Naukri search results
+        # Naukri search results
         try:
-            logging.info("Selenium: scanning Naukri search results (best-effort)...")
+            logging.info("Selenium: scanning Naukri search results...")
             nurl = f"https://www.naukri.com/{quote_plus(config['query'])}-jobs-in-{quote_plus(config['location'])}"
             driver.get(nurl)
             time.sleep(3)
@@ -800,20 +800,18 @@ def main():
         except Exception as e:
             logging.warning("Naukri selenium scan failed: %s", e)
 
-        # Selenium: Glassdoor (optional) - not mandatory
-        # (skipped for brevity; possible to add similarly)
     finally:
-        # keep driver alive for auto-apply stage
+        # keep driver alive for later
         pass
 
     logging.info("Total jobs collected before dedupe: %d", len(all_jobs))
     all_jobs = dedupe_jobs(all_jobs)
     logging.info("After dedupe: %d", len(all_jobs))
 
-    # Export raw
+    # Export raw list
     export_jobs(all_jobs, "jobs_raw.xlsx")
 
-    # Filter shortlist using resume keywords and salary cutoff (keep jobs with salary N/A)
+    # Filter shortlist with resume + salary cutoff
     shortlisted = []
     for j in all_jobs:
         j.role = normalize_text(j.role)
@@ -822,12 +820,18 @@ def main():
         j.description_snippet = normalize_text(j.description_snippet)
         if matches_resume(j) and meets_cutoff(j):
             shortlisted.append(j)
-    logging.info("Shortlisted after matching and cutoff: %d", len(shortlisted))
+    logging.info("Shortlisted after filtering: %d", len(shortlisted))
 
-    # Use the existing selenium driver for applying (re-create a new driver to be safe)
+    # Cap number of applications
+    to_apply = shortlisted[:MAX_APPS_PER_RUN]
+    skipped = shortlisted[MAX_APPS_PER_RUN:]
+    for j in skipped:
+        j.status = "Pending"   # mark rest as pending for manual apply
+
+    # Run auto-apply for capped jobs
     driver_apply = make_selenium_driver(headless=HEADLESS)
     try:
-        # reload cookies if possible
+        # reload cookies
         try:
             load_or_login_save_cookies("linkedin", "https://www.linkedin.com/login", linkedin_login_flow, driver_apply)
         except Exception:
@@ -841,14 +845,15 @@ def main():
         except Exception:
             pass
 
-        # Auto-apply loop (best-effort)
-        run_selenium_scans_and_apply(driver_apply, shortlisted, config)
+        run_selenium_scans_and_apply(driver_apply, to_apply, config)
     finally:
         driver_apply.quit()
 
     # final export with statuses
     export_jobs(shortlisted, "jobs_with_status.xlsx")
-    logging.info("Done. Files produced: jobs_raw.xlsx, jobs_with_status.xlsx")
+    logging.info("Done. Applied to %d jobs, capped at %d. Files: jobs_raw.xlsx, jobs_with_status.xlsx",
+                 len(to_apply), MAX_APPS_PER_RUN)
+
 
 if __name__ == "__main__":
     main()
