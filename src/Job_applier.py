@@ -808,17 +808,20 @@ def main():
     all_jobs = dedupe_jobs(all_jobs)
     logging.info("After dedupe: %d", len(all_jobs))
 
-    # Export raw list
-    export_jobs(all_jobs, "jobs_raw.xlsx")
+    # Filter jobs to only those matching your resume
+    relevant_jobs = [j for j in all_jobs if matches_resume(j)]
 
-    # Filter shortlist with resume + salary cutoff
+    # Export only relevant jobs
+    export_jobs(relevant_jobs, "jobs_raw.xlsx")
+
+    # Further filter shortlist with salary cutoff
     shortlisted = []
-    for j in all_jobs:
+    for j in relevant_jobs:
         j.role = normalize_text(j.role)
         j.company = normalize_text(j.company)
         j.location = normalize_text(j.location)
         j.description_snippet = normalize_text(j.description_snippet)
-        if matches_resume(j) and meets_cutoff(j):
+        if meets_cutoff(j):
             shortlisted.append(j)
     logging.info("Shortlisted after filtering: %d", len(shortlisted))
 

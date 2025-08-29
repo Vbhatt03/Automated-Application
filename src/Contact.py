@@ -1,9 +1,4 @@
-"""
-contact_discovery_and_outreach.py
-Step 3: Contact Discovery (Hunter.io API)
-Step 5: Outreach Preparation (Cold Email + LinkedIn Messages)
-"""
-
+# ...existing code...
 import os
 import re
 import requests
@@ -15,10 +10,12 @@ from dotenv import load_dotenv
 # ---------------------
 load_dotenv()
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY")
+SNOV_API_USER = os.getenv("SNOV_API_USER")
+SNOV_API_SECRET = os.getenv("SNOV_API_SECRET")
+CLEARBIT_API_KEY = os.getenv("CLEARBIT_API_KEY")
 
 EXCEL_FILE = "jobs_with_status.xlsx"
 OUTPUT_FILE = "jobs_with_contacts.xlsx"
-
 
 # ---------------------
 # Email validation
@@ -29,7 +26,6 @@ def is_valid_email(email: str) -> bool:
     pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
     return re.match(pattern, email) is not None
 
-
 # ---------------------
 # Hunter.io API
 # ---------------------
@@ -38,9 +34,7 @@ def hunter_domain_search(company: str, domain_hint=None):
     Fetch recruiter/company emails using Hunter.io API.
     """
     if not HUNTER_API_KEY:
-        print("⚠️ No Hunter.io API key found in .env")
         return []
-
     base_url = "https://api.hunter.io/v2/domain-search"
     params = {
         "company": company,
@@ -49,7 +43,6 @@ def hunter_domain_search(company: str, domain_hint=None):
     }
     if domain_hint:
         params["domain"] = domain_hint
-
     try:
         r = requests.get(base_url, params=params, timeout=10)
         if r.status_code == 200:
@@ -60,144 +53,110 @@ def hunter_domain_search(company: str, domain_hint=None):
                 if is_valid_email(mail):
                     emails.append(mail)
             return emails
-    except Exception as e:
-        print(f"⚠️ Hunter.io lookup failed for {company}: {e}")
+    except Exception:
+        pass
     return []
 
-
 # ---------------------
-# Classify company type
+# Snov.io API
 # ---------------------
-def classify_company(job):
+def snov_domain_search(company: str, domain_hint=None):
     """
-    Heuristic: classify as startup, bigtech, or midlevel.
+    Fetch emails using Snov.io API.
     """
-    name = str(job['company']).lower()
-    source = str(job.get('source', '')).lower()
-
-    bigtech_keywords = ["google", "microsoft", "amazon", "meta", "apple",
-                        "netflix", "nvidia", "intel", "oracle", "adobe"]
-    startup_sources = ["yc", "wellfound", "startup", "remoteok", "weworkremotely", "remotive"]
-
-    if any(b in name for b in bigtech_keywords):
-        return "bigtech"
-    elif any(s in source for s in startup_sources):
-        return "startup"
-    else:
-        return "midlevel"
-
+    if not SNOV_API_USER or not SNOV_API_SECRET:
+        return []
+    # Get access token
+    try:
+        token_resp = requests.post(
+            "https://api.snov.io/v1/oauth/access_token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": SNOV_API_USER,
+                "client_secret": SNOV_API_SECRET
+            },
+            timeout=10
+        )
+        if token_resp.status_code != 200:
+            return []
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            return []
+        # Use domain search
+        domain = domain_hint or ""
+        if not domain:
+            # Try to get domain from company name using Clearbit
+            domain = clearbit_domain_lookup(company)
+        if not domain:
+            return []
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params = {"domain": domain, "type": "all", "limit": 5}
+        r = requests.get("https://api.snov.io/v2/domain-emails-with-info", headers=headers, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            emails = []
+            for e in data.get("emails", []):
+                mail = e.get("email")
+                if is_valid_email(mail):
+                    emails.append(mail)
+            return emails
+    except Exception:
+        pass
+    return []
 
 # ---------------------
-# Cold outreach templates
+# Clearbit API (domain lookup only)
 # ---------------------
-def generate_cold_email(job, email):
-    ctype = classify_company(job)
-
-    if ctype == "startup":
-        return f"""Subject: Excited about {job['role']} at {job['company']}
-
-Hi {job['company']} Team,
-
-I came across the {job['role']} role at {job['company']} and it immediately resonated with me. 
-As someone deeply involved in Machine Learning, Edge AI and Robotics projects (including leading a 50+ member rover team), 
-I thrive in fast-paced environments where ideas quickly turn into real products.
-
-I’d love to contribute my skills to help {job['company']} build and scale faster. 
-Let me know if we could connect for a quick chat.
-
-Best,  
-Vyomesh  
-Email: {email if email else "your_email_here"}  
-LinkedIn: linkedin.com/in/yourprofile
-"""
-
-    elif ctype == "bigtech":
-        return f"""Subject: Application Follow-Up – {job['role']} at {job['company']}
-
-Dear {job['company']} Recruitment Team,
-
-I recently applied for the {job['role']} role and wanted to follow up directly. 
-With my background in Computer Vision, Embedded AI, and ML research, I’m eager to contribute to impactful large-scale systems 
-that align with {job['company']}'s mission.
-
-Please let me know if additional details would be helpful. I’d be delighted to discuss how my experience can add value.
-
-Sincerely,  
-Vyomesh  
-Email: {email if email else "your_email_here"}  
-LinkedIn: linkedin.com/in/yourprofile
-"""
-
-    else:  # midlevel / generic
-        return f"""Subject: Interest in {job['role']} at {job['company']}
-
-Hi {job['company']} Hiring Team,
-
-I recently submitted an application for the {job['role']} role at {job['company']}. 
-My experience spans ML model deployment, robotics software, and embedded systems, which I believe aligns with this position.
-
-I’d be happy to share more details about my background and projects if helpful. Looking forward to your response.
-
-Best regards,  
-Vyomesh  
-Email: {email if email else "your_email_here"}  
-LinkedIn: linkedin.com/in/yourprofile
-"""
-
-
-def generate_linkedin_message(job):
-    ctype = classify_company(job)
-
-    if ctype == "startup":
-        return f"""Hi! Just applied for the {job['role']} role at {job['company']}. 
-Excited about what you’re building – would love to connect and explore how I can contribute."""
-    elif ctype == "bigtech":
-        return f"""Hello, I recently applied for the {job['role']} role at {job['company']}. 
-I’d appreciate connecting to stay updated and learn more about the team."""
-    else:
-        return f"""Hi, I applied for the {job['role']} role at {job['company']}. 
-Would be great to connect and understand more about the opportunity."""
-
+def clearbit_domain_lookup(company: str):
+    """
+    Use Clearbit to get the domain for a company.
+    """
+    if not CLEARBIT_API_KEY:
+        return None
+    try:
+        headers = {"Authorization": f"Bearer {CLEARBIT_API_KEY}"}
+        params = {"name": company}
+        r = requests.get("https://company.clearbit.com/v2/companies/find", headers=headers, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("domain")
+    except Exception:
+        pass
+    return None
 
 # ---------------------
 # Main pipeline
 # ---------------------
 def main():
     df = pd.read_excel(EXCEL_FILE)
-
     recruiter_contacts = []
-    cold_emails = []
-    linkedin_msgs = []
 
     for _, row in df.iterrows():
         status = str(row.get("status", "")).lower()
         company = str(row.get("company", ""))
-        role = str(row.get("role", ""))
+        domain_hint = None
 
         emails = []
-        cold_email = ""
-        linkedin_msg = ""
-
         if status == "applied":
+            # Try Hunter.io first
             emails = hunter_domain_search(company)
-            email_str = ", ".join(emails) if emails else "N/A"
-
-            cold_email = generate_cold_email(row, emails[0] if emails else "")
-            linkedin_msg = generate_linkedin_message(row)
+            # If Hunter fails, try Snov.io
+            if not emails:
+                # Try to get domain from Clearbit if possible
+                domain_hint = clearbit_domain_lookup(company)
+                emails = snov_domain_search(company, domain_hint)
+            # If still no emails, try Clearbit for domain (for reference)
+            if not emails and not domain_hint:
+                domain_hint = clearbit_domain_lookup(company)
+            email_str = ", ".join(emails) if emails else (domain_hint if domain_hint else "N/A")
         else:
             email_str = ""
 
         recruiter_contacts.append(email_str)
-        cold_emails.append(cold_email)
-        linkedin_msgs.append(linkedin_msg)
 
     df["Recruiter Contacts"] = recruiter_contacts
-    df["Cold Email Draft"] = cold_emails
-    df["LinkedIn Message"] = linkedin_msgs
-
     df.to_excel(OUTPUT_FILE, index=False)
-    print(f"✅ Saved enriched file with contacts & outreach drafts → {OUTPUT_FILE}")
-
+    print(f"✅ Saved file with recruiter contacts → {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()
