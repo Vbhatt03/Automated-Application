@@ -1,7 +1,7 @@
 How to use:
 
 
-1. Create a .env file and fill in all the required credentials. Essential step, the applier wont work without this.
+1. Create a .env file and fill in all the required credentials. Essential step, the applier wont work without this(Open both the scripts in src to see all the websites that are used).
 
 
 
